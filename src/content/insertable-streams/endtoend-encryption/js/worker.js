@@ -24,6 +24,7 @@ let currentKeyIdentifier = 0;
 // which is 10 bytes for key frames and 3 bytes for delta frames.
 // For opus (where encodedFrame.type is not set) this is the TOC byte from
 //   https://tools.ietf.org/html/rfc6716#section-3.1
+// TODO: make this work for other codecs.
 //
 // It makes the (encrypted) video and audio much more fun to watch and listen to
 // as the decoder does not immediately throw a fatal error.
@@ -39,11 +40,14 @@ function dump(encodedFrame, direction, max = 16) {
   for (let j = 0; j < data.length && j < max; j++) {
     bytes += (data[j] < 16 ? '0' : '') + data[j].toString(16) + ' ';
   }
+  const metadata = encodedFrame.getMetadata();
   console.log(performance.now().toFixed(2), direction, bytes.trim(),
       'len=' + encodedFrame.data.byteLength,
       'type=' + (encodedFrame.type || 'audio'),
-      'ts=' + encodedFrame.timestamp,
-      'ssrc=' + encodedFrame.getMetadata().synchronizationSource
+      'ts=' + (metadata.rtpTimestamp || encodedFrame.timestamp),
+      'ssrc=' + metadata.synchronizationSource,
+      'pt=' + (metadata.payloadType || '(unknown)'),
+      'mimeType=' + (metadata.mimeType || '(unknown)'),
   );
 }
 
@@ -114,10 +118,8 @@ function decodeFunction(encodedFrame, controller) {
   controller.enqueue(encodedFrame);
 }
 
-onmessage = async (event) => {
-  const {operation} = event.data;
+function handleTransform(operation, readable, writable) {
   if (operation === 'encode') {
-    const {readable, writable} = event.data;
     const transformStream = new TransformStream({
       transform: encodeFunction,
     });
@@ -125,14 +127,21 @@ onmessage = async (event) => {
         .pipeThrough(transformStream)
         .pipeTo(writable);
   } else if (operation === 'decode') {
-    const {readable, writable} = event.data;
     const transformStream = new TransformStream({
       transform: decodeFunction,
     });
     readable
         .pipeThrough(transformStream)
         .pipeTo(writable);
-  } else if (operation === 'setCryptoKey') {
+  }
+}
+
+// Handler for messages, including transferable streams.
+onmessage = (event) => {
+  if (event.data.operation === 'encode' || event.data.operation === 'decode') {
+    return handleTransform(event.data.operation, event.data.readable, event.data.writable);
+  }
+  if (event.data.operation === 'setCryptoKey') {
     if (event.data.currentCryptoKey !== currentCryptoKey) {
       currentKeyIdentifier++;
     }
@@ -140,3 +149,11 @@ onmessage = async (event) => {
     useCryptoOffset = event.data.useCryptoOffset;
   }
 };
+
+// Handler for RTCRtpScriptTransforms.
+if (self.RTCTransformEvent) {
+  self.onrtctransform = (event) => {
+    const transformer = event.transformer;
+    handleTransform(transformer.options.operation, transformer.readable, transformer.writable);
+  };
+}

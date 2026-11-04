@@ -23,8 +23,8 @@
     <title>Peer connection: adjust bandwidth</title>
 
     <link rel="icon" sizes="192x192" href="../../../images/webrtc-icon-192x192.png">
-    <link href="//fonts.googleapis.com/css?family=Roboto:300,400,500,700" rel="stylesheet" type="text/css">
-    <link href="//fonts.googleapis.com/css?family=Inconsolata" rel="stylesheet" type="text/css">
+    <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700" rel="stylesheet" type="text/css">
+    <link href="https://fonts.googleapis.com/css?family=Inconsolata" rel="stylesheet" type="text/css">
     <link rel="stylesheet" href="../../../css/main.css"/>
     <link rel="stylesheet" href="css/main.css"/>
 
@@ -49,10 +49,12 @@
             <option value="500">500</option>
             <option value="250">250</option>
             <option value="125">125</option>
+            <option value="75">75</option>
         </select>
         kbps
         <button id="callButton">Call</button>
         <button id="hangupButton">Hang Up</button>
+        Use synthetic video: <input type="checkbox" id="synthetic">
     </div>
     <div class="graph-container" id="bitrateGraph">
         <div>Bitrate</div>

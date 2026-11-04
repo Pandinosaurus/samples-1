@@ -14,6 +14,7 @@ const localVideo = document.querySelector('video#localVideo');
 const callButton = document.querySelector('button#callButton');
 const hangupButton = document.querySelector('button#hangupButton');
 const bandwidthSelector = document.querySelector('select#bandwidth');
+const synthetic = document.querySelector('input#synthetic');
 hangupButton.disabled = true;
 callButton.onclick = call;
 hangupButton.onclick = hangup;
@@ -36,10 +37,28 @@ let packetSeries;
 
 let lastResult;
 
+let lastRemoteStart = 0;
+
+// lastRemoteFullSizeDelay is designed to be picked up by a test script.
+// eslint-disable-next-line no-unused-vars
+let lastRemoteFullSizeDelay = 0;
+
 const offerOptions = {
   offerToReceiveAudio: 0,
   offerToReceiveVideo: 1
 };
+
+remoteVideo.addEventListener('resize', ev => {
+  const elapsed = performance.now() - lastRemoteStart;
+  console.log(elapsed, ': Resize event, size ',
+      remoteVideo.videoWidth, 'x', remoteVideo.videoHeight);
+  if (localVideo.videoWidth == remoteVideo.videoWidth &&
+      localVideo.videoHeight == remoteVideo.videoHeight) {
+    lastRemoteFullSizeDelay = elapsed;
+    console.log('Full size achieved');
+  }
+});
+
 
 function gotStream(stream) {
   hangupButton.disabled = false;
@@ -86,10 +105,15 @@ function call() {
   pc2.onicecandidate = onIceCandidate.bind(pc2);
   pc2.ontrack = gotRemoteStream;
 
-  console.log('Requesting local stream');
-  navigator.mediaDevices.getUserMedia({video: true})
-      .then(gotStream)
-      .catch(e => alert('getUserMedia() error: ' + e.name));
+  if (synthetic.checked) {
+    console.log('Requesting synthetic local stream');
+    gotStream(syntheticVideoStream());
+  } else {
+    console.log('Requesting live local stream');
+    navigator.mediaDevices.getUserMedia({video: true})
+        .then(gotStream)
+        .catch(e => alert('getUserMedia() error: ' + e.name));
+  }
 }
 
 function gotDescription1(desc) {
@@ -138,6 +162,8 @@ function gotRemoteStream(e) {
   if (remoteVideo.srcObject !== e.streams[0]) {
     remoteVideo.srcObject = e.streams[0];
     console.log('Received remote stream');
+    lastRemoteStart = performance.now();
+    lastRemoteFullSizeDelay = 0;
   }
 }
 
@@ -174,8 +200,14 @@ function onSetSessionDescriptionError(error) {
 bandwidthSelector.onchange = () => {
   bandwidthSelector.disabled = true;
   const bandwidth = bandwidthSelector.options[bandwidthSelector.selectedIndex].value;
+  setBandwidth(bandwidth)
+      .then(() => {
+        bandwidthSelector.disabled = false;
+      });
+};
 
-  // In Chrome, use RTCRtpSender.setParameters to change bandwidth without
+function setBandwidth(bandwidthInKbps) {
+  // In modern browsers, use RTCRtpSender.setParameters to change bandwidth without
   // (local) renegotiation. Note that this will be within the envelope of
   // the initial maximum bandwidth negotiated via SDP.
   if ((adapter.browserDetails.browser === 'chrome' ||
@@ -189,35 +221,27 @@ bandwidthSelector.onchange = () => {
     if (!parameters.encodings) {
       parameters.encodings = [{}];
     }
-    if (bandwidth === 'unlimited') {
+    if (bandwidthInKbps === 'unlimited') {
       delete parameters.encodings[0].maxBitrate;
     } else {
-      parameters.encodings[0].maxBitrate = bandwidth * 1000;
+      parameters.encodings[0].maxBitrate = bandwidthInKbps * 1000;
     }
-    sender.setParameters(parameters)
-        .then(() => {
-          bandwidthSelector.disabled = false;
-        })
-        .catch(e => console.error(e));
-    return;
+    return sender.setParameters(parameters);
   }
-  // Fallback to the SDP munging with local renegotiation way of limiting
+  // Fallback to the SDP changes with local renegotiation as way of limiting
   // the bandwidth.
-  pc1.createOffer()
+  return pc1.createOffer()
       .then(offer => pc1.setLocalDescription(offer))
       .then(() => {
         const desc = {
           type: pc1.remoteDescription.type,
-          sdp: bandwidth === 'unlimited' ?
+          sdp: bandwidthInKbps === 'unlimited' ?
           removeBandwidthRestriction(pc1.remoteDescription.sdp) :
-          updateBandwidthRestriction(pc1.remoteDescription.sdp, bandwidth)
+          updateBandwidthRestriction(pc1.remoteDescription.sdp, bandwidthInKbps)
         };
         console.log('Applying bandwidth restriction to setRemoteDescription:\n' +
         desc.sdp);
         return pc1.setRemoteDescription(desc);
-      })
-      .then(() => {
-        bandwidthSelector.disabled = false;
       })
       .catch(onSetSessionDescriptionError);
 };
@@ -288,3 +312,50 @@ window.setInterval(() => {
     lastResult = res;
   });
 }, 1000);
+
+// Return a number between 0 and maxValue based on the input number,
+// so that the output changes smoothly up and down.
+function triangle(number, maxValue) {
+  const modulus = (maxValue + 1) * 2;
+  return Math.abs(number % modulus - maxValue);
+}
+
+function syntheticVideoStream({width = 640, height = 480, signal} = {}) {
+  const canvas = Object.assign(
+      document.createElement('canvas'), {width, height}
+  );
+  const ctx = canvas.getContext('2d');
+  const stream = canvas.captureStream();
+
+  let count = 0;
+  setInterval(() => {
+    // Use relatively-prime multipliers to get a color roll
+    const r = triangle(count*2, 255);
+    const g = triangle(count*3, 255);
+    const b = triangle(count*5, 255);
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    count += 1;
+    const boxSize=80;
+    ctx.fillRect(0, 0, width, height);
+    // Add some bouncing boxes in contrast color to add a little more noise.
+    const rContrast = (r + 128)%256;
+    const gContrast = (g + 128)%256;
+    const bContrast = (b + 128)%256;
+    ctx.fillStyle = `rgb(${rContrast}, ${gContrast}, ${bContrast})`;
+    const xpos = triangle(count*5, width - boxSize);
+    const ypos = triangle(count*7, height - boxSize);
+    ctx.fillRect(xpos, ypos, boxSize, boxSize);
+    const xpos2 = triangle(count*11, width - boxSize);
+    const ypos2 = triangle(count*13, height - boxSize);
+    ctx.fillRect(xpos2, ypos2, boxSize, boxSize);
+    // If signal is set (0-255), add a constant-color box of that luminance to
+    // the video frame at coordinates 20 to 60 in both X and Y direction.
+    // (big enough to avoid color bleed from surrounding video in some codecs,
+    // for more stable tests).
+    if (signal != undefined) {
+      ctx.fillStyle = `rgb(${signal}, ${signal}, ${signal})`;
+      ctx.fillRect(20, 20, 40, 40);
+    }
+  }, 100);
+  return stream;
+}

@@ -23,6 +23,7 @@ let localStream;
 
 let bitrateGraph;
 let bitrateSeries;
+let targetBitrateSeries;
 let headerrateSeries;
 
 let packetGraph;
@@ -55,7 +56,7 @@ const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
 if (supportsSetCodecPreferences) {
   codecSelector.style.display = 'none';
 
-  const {codecs} = RTCRtpSender.getCapabilities('audio');
+  const {codecs} = RTCRtpReceiver.getCapabilities('audio');
   codecs.forEach(codec => {
     if (['audio/CN', 'audio/telephone-event'].includes(codec.mimeType)) {
       return;
@@ -97,29 +98,15 @@ function gotStream(stream) {
   localStream.getTracks().forEach(track => pc1.addTrack(track, localStream));
   console.log('Adding Local Stream to peer connection');
 
-  if (supportsSetCodecPreferences) {
-    const preferredCodec = codecPreferences.options[codecPreferences.selectedIndex];
-    if (preferredCodec.value !== '') {
-      const [mimeType, clockRate, sdpFmtpLine] = preferredCodec.value.split(' ');
-      const {codecs} = RTCRtpSender.getCapabilities('audio');
-      console.log(mimeType, clockRate, sdpFmtpLine);
-      console.log(JSON.stringify(codecs, null, ' '));
-      const selectedCodecIndex = codecs.findIndex(c => c.mimeType === mimeType && c.clockRate === parseInt(clockRate, 10) && c.sdpFmtpLine === sdpFmtpLine);
-      const selectedCodec = codecs[selectedCodecIndex];
-      codecs.splice(selectedCodecIndex, 1);
-      codecs.unshift(selectedCodec);
-      const transceiver = pc1.getTransceivers().find(t => t.sender && t.sender.track === localStream.getAudioTracks()[0]);
-      transceiver.setCodecPreferences(codecs);
-      console.log('Preferred video codec', selectedCodec);
-    }
-  }
-
   pc1.createOffer(offerOptions)
       .then(gotDescription1, onCreateSessionDescriptionError);
 
   bitrateSeries = new TimelineDataSeries();
   bitrateGraph = new TimelineGraphView('bitrateGraph', 'bitrateCanvas');
   bitrateGraph.updateEndDate();
+
+  targetBitrateSeries = new TimelineDataSeries();
+  targetBitrateSeries.setColor('blue');
 
   headerrateSeries = new TimelineDataSeries();
   headerrateSeries.setColor('green');
@@ -203,6 +190,22 @@ function hangup() {
 }
 
 function gotRemoteStream(e) {
+  if (supportsSetCodecPreferences) {
+    const preferredCodec = codecPreferences.options[codecPreferences.selectedIndex];
+    if (preferredCodec.value !== '') {
+      const [mimeType, clockRate, sdpFmtpLine] = preferredCodec.value.split(' ');
+      const {codecs} = RTCRtpReceiver.getCapabilities('audio');
+      console.log(mimeType, clockRate, sdpFmtpLine);
+      console.log(JSON.stringify(codecs, null, ' '));
+      const selectedCodecIndex = codecs.findIndex(c => c.mimeType === mimeType && c.clockRate === parseInt(clockRate, 10) && c.sdpFmtpLine === sdpFmtpLine);
+      const selectedCodec = codecs[selectedCodecIndex];
+      codecs.splice(selectedCodecIndex, 1);
+      codecs.unshift(selectedCodec);
+      e.transceiver.setCodecPreferences(codecs);
+      console.log('Preferred video codec', selectedCodec);
+    }
+  }
+
   if (audio2.srcObject !== e.streams[0]) {
     audio2.srcObject = e.streams[0];
     console.log('Received remote stream');
@@ -346,7 +349,7 @@ window.setInterval(() => {
 
         packets = report.packetsSent;
         if (lastResult && lastResult.has(report.id)) {
-          const deltaT = now - lastResult.get(report.id).timestamp;
+          const deltaT = (now - lastResult.get(report.id).timestamp) / 1000;
           // calculate bitrate
           const bitrate = 8 * (bytes - lastResult.get(report.id).bytesSent) /
             deltaT;
@@ -356,11 +359,12 @@ window.setInterval(() => {
           // append to chart
           bitrateSeries.addPoint(now, bitrate);
           headerrateSeries.addPoint(now, headerrate);
-          bitrateGraph.setDataSeries([bitrateSeries, headerrateSeries]);
+          targetBitrateSeries.addPoint(now, report.targetBitrate);
+          bitrateGraph.setDataSeries([bitrateSeries, headerrateSeries, targetBitrateSeries]);
           bitrateGraph.updateEndDate();
 
           // calculate number of packets and append to chart
-          packetSeries.addPoint(now, 1000 * (packets -
+          packetSeries.addPoint(now, (packets -
             lastResult.get(report.id).packetsSent) / deltaT);
           packetGraph.setDataSeries([packetSeries]);
           packetGraph.updateEndDate();

@@ -32,6 +32,14 @@ let audioImpairmentAtStart = 0;
 
 let result;
 
+// Allows configuration of bundlePolicy et al.
+// eslint-disable-next-line prefer-const
+let configuration = null;
+
+// Preferring a certain codec is an expert option without GUI.
+// eslint-disable-next-line prefer-const
+let preferredVideoCodecMimeType = undefined; // e.g. 'video/VP8'
+
 localVideo.addEventListener('loadedmetadata', function() {
   console.log(`Local video videoWidth: ${this.videoWidth}px,  videoHeight: ${this.videoHeight}px`);
 });
@@ -118,16 +126,27 @@ async function call() {
   if (audioTracks.length > 0) {
     console.log(`Using audio device: ${audioTracks[0].label}`);
   }
-  const servers = null;
-  pc1 = new RTCPeerConnection(servers);
+  pc1 = new RTCPeerConnection(configuration);
   console.log('Created local peer connection object pc1');
   pc1.onicecandidate = e => onIceCandidate(pc1, e);
-  pc2 = new RTCPeerConnection(servers);
+  pc2 = new RTCPeerConnection(configuration);
   console.log('Created remote peer connection object pc2');
   pc2.onicecandidate = e => onIceCandidate(pc2, e);
   pc1.oniceconnectionstatechange = e => onIceStateChange(pc1, e);
   pc2.oniceconnectionstatechange = e => onIceStateChange(pc2, e);
   pc2.addEventListener('track', gotRemoteStream, {once: true});
+  if (preferredVideoCodecMimeType) {
+    pc2.ontrack = (e) => {
+      if (e.track.kind === 'video') {
+        const {codecs} = RTCRtpReceiver.getCapabilities('video');
+        const selectedCodecIndex = codecs.findIndex(c => c.mimeType === preferredVideoCodecMimeType);
+        const selectedCodec = codecs[selectedCodecIndex];
+        codecs.splice(selectedCodecIndex, 1);
+        codecs.unshift(selectedCodec);
+        e.transceiver.setCodecPreferences(codecs);
+      }
+    };
+  }
 
   localStream.getTracks().forEach(track => pc1.addTrack(track, localStream));
   console.log('Added local stream to pc1');
@@ -149,7 +168,7 @@ async function onIceCandidate(pc, event) {
   if (event.candidate) {
     console.log(`${getName(pc)} emitted ICE candidate for index ${event.candidate.sdpMLineIndex}:\n${event.candidate.candidate}`);
   } else {
-    console.log(`$getName(pc)} ICE NULL candidate`);
+    console.log(`${getName(pc)} ICE NULL candidate`);
   }
   await getOtherPc(pc).addIceCandidate(event.candidate);
   console.log(`${getName(pc)} addIceCandidate success`);
@@ -184,7 +203,7 @@ async function getAudioImpairment(audioTransceiver) {
   const stats = await audioTransceiver.receiver.getStats();
   let currentImpairment;
   stats.forEach(stat => {
-    if (stat.type == 'track') {
+    if (stat.type == 'inbound-rtp') {
       currentImpairment = stat.concealedSamples;
     }
   });
